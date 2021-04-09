@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+
 """
 Created on Mon Jun 15 00:49:29 2020
 
@@ -11,17 +12,27 @@ from datetime import date, datetime, timedelta
 import os
 import re
 from pynabapi import YnabClient
+import json
+import requests
 
+# import credentials in better way
+with open('/Users/ryder/.credentials/ynab.json', 'r') as file:
+    ynab_creds = json.loads(file.read())
+    
+YNAB_API_KEY = ynab_creds['api_key']
+YNAB_BUDGET_ID = ynab_creds['budget_id']
 
 
 #%%
 # set working directory to Downloads folder
+if os.name == "posix":
+    curr_dir = os.path.join(os.path.expanduser('~'), "Downloads")
+else:
+    curr_dir = os.path.join(os.environ['USERPROFILE'], "Downloads")
 
-curr_dir = os.path.join(os.environ['USERPROFILE'], "Downloads")
 os.chdir(curr_dir)
 
-
-YNAB_KEYS_DIR = r"C:\users\ryder\keys\YNAB"
+YNAB_KEYS_DIR = os.path.join("~", "keys", "YNAB")
 
 #%%
 files = filter(os.path.isfile, os.listdir(curr_dir))
@@ -42,25 +53,18 @@ def find_newest_amazon_report( path_to_dir=os.getcwd() ):
 newest_amzfile = find_newest_amazon_report()
 
 
-
 #%%
 df = pd.read_csv(newest_amzfile)
-df.info()
+df.columns = df.columns.str.replace('\W+', '_').str.lower()
 
-#%%
-# reformat Item Total as numeric
-df.loc[:, "Item Total"] = df.loc[:, "Item Total"].str.replace("$", "").astype(float)
+df.item_total = df.item_total.str.replace("$", "", regex=False).astype(float)
+df.order_date = pd.to_datetime(df.order_date)
 
-# reformat Order Date as date
-df.loc[:, "Order Date"] = pd.to_datetime(df.loc[:, "Order Date"])
-
-df.loc[:, ["Order Date", "Title", "Item Total"]].info()
-
-
-
-#%%
-df_recent = df.sort_values("Order Date", ascending = False).head(30).reset_index()
-
+df_recent = (
+    df.sort_values("order_date", ascending=False)
+    .head(30)
+    .reset_index(drop=True)
+)
 
 #%%
 earliest_amz_tx_dt = df_recent['Order Date'].min().date()
@@ -76,7 +80,8 @@ def find_possible_order_combinations(dat,
     
     # filter the dataframe by how many days you want to look back
     n_days_ago = datetime.now() - timedelta(days=lookback)
-    dat = dat[dat[date_col] > n_days_ago].reset_index()
+    # dat = dat[dat[date_col] > n_days_ago].reset_index()
+
     
     index_combinations = []
     prices = dat[prices_col]
@@ -107,67 +112,66 @@ def find_possible_order_combinations(dat,
         
         
 #%%
-def get_trans_from_ynab(ynab_keys_dir=YNAB_KEYS_DIR, 
-                        since_date=datetime.now() - timedelta(days=30)):
+def get_trans_from_ynab(creds, since_date):
 
-    # since_date = get_last_trns_date()
-
-    ynab_client_key_path = os.path.join(ynab_keys_dir, "ynab_api_key.txt")
-    ynab_budget_id_path = os.path.join(ynab_keys_dir, "ynab_budget_id.txt")
+    url = (
+      f"https://api.youneedabudget.com/v1/budgets/" \
+      f"{YNAB_BUDGET_ID}/transactions?since_date={since_date}" \
+      "&type=unapproved"
+    )
     
-    with open(ynab_client_key_path, 'r') as y_api_key_txt:
-        YNAB_CLIENT_KEY = y_api_key_txt.readline().strip()
+    resp = requests.get(url, headers = {"Authorization": f"bearer {YNAB_API_KEY}"})
 
-    with open(ynab_budget_id_path, 'r') as y_bud_id_txt:
-        YNAB_BUDGET_ID = y_bud_id_txt.readline().strip()
-
-    yc = YnabClient(YNAB_CLIENT_KEY)
-
-    all_transactions = yc.get_transaction(budget_id=YNAB_BUDGET_ID)
-
-    column_names = ['date', 'payee_name', 'account_name', 'category_name', 'memo', 'amount']
-    listofitems = []
-
-    for item in all_transactions:
-        listofitems.append(str(item.date)           + ',,,' + 
-                           str(item.payee_name)     + ',,,' +
-                           str(item.account_name)   + ',,,' +
-                           str(item.category_name)  + ',,,' + 
-                           str(item.memo)           + ',,,' +
-                           str(item.amount)
-                          )
-
-    ynab_df = pd.Series(listofitems).str.split(',,,', expand=True)
-    ynab_df.columns = column_names
+    j = json.loads(resp.text)
+    
+    ynab_df = pd.json_normalize(j['data']['transactions'])
+    
+    ynab_df = ynab_df[[
+      'date', 
+      'payee_name', 
+      'account_name', 
+      'category_name', 
+      'memo', 
+      'amount'
+    ]]
+    
     ynab_df.date = pd.to_datetime(ynab_df.date)
     ynab_df.amount = ynab_df.amount.astype(int) / -1000
 
-    ynab_df_filter = ynab_df[(ynab_df.date >= since_date)]
-
-
-
-    return(ynab_df_filter)
+    return ynab_df
         
 
 #%%
-ynab_df = get_trans_from_ynab()
+
+forty_days_ago = (datetime.now() - timedelta(days=40)).strftime("%Y-%m-%d")
+
+ynab_df = get_trans_from_ynab(creds=ynab_creds, since_date=forty_days_ago)
+
+
+# %%
 ynab_df = ynab_df.loc[ynab_df.account_name == "RC AMZ 6063 (12th)"]
-ynab_df = ynab_df.loc[ynab_df.category_name.isin(["None", ""])]
+
+# %%
 ynab_df = ynab_df.loc[~ynab_df.payee_name.str.contains("Transfer")]
 
-#%%
-indices = find_possible_order_combinations(dat = df, 
-                                           max_combo_size = 3,
-                                           lookback = 15,
-                                           charge = 36.03)
-#%%
+
+
+
+# %%
 for index, row in ynab_df.iterrows():
     print()
     
     print("=" * 8)
     
     
-    find_possible_order_combinations(dat=df,
+    find_possible_order_combinations(dat=ynab_df,
                                      max_combo_size=3,
                                      lookback=15,
-                                     charge=row["amount"])
+                                     charge=ynab_df["amount"])
+
+# %%
+find_possible_order_combinations(dat=df,
+                                    max_combo_size=3,
+                                    lookback=15,
+                                    charge=105.99)
+# %%

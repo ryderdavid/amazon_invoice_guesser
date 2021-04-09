@@ -1,2 +1,4 @@
-# amazon_invoice_guesser
+# Amazon Invoice Guesser
 Amazon is a PITA on how it charges multiple items you purchase; simple script to suggest possible combinations of items from your order history that match a given dollar value
+
+
