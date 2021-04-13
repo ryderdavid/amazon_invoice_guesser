@@ -6,7 +6,7 @@ import datetime
 
 amz = pd.read_csv(os.path.join("~", "Downloads", "26-Feb-2021_to_28-Mar-2021.csv"))
 amz.columns = [re.sub(r'[^\w\d]', '_', c).lower() for c in amz.columns]
-amz.order_date = pd.to_datetime(amz.order_date)
+# amz.order_date = pd.to_datetime(amz.order_date)
 moneycols = [c for c in amz.columns if "total" in c]
 amz[moneycols] = (
   amz[moneycols].apply(lambda x: x.str.replace("$", "", regex=False).astype(float))
@@ -62,7 +62,16 @@ def get_transactions_from_ynab(budget_id, token, since_date):
   df.amount = df.amount / -1000.00
   return df
 
-
+base_url = "https://api.youneedabudget.com/v1"
+request_url = os.path.join(base_url, 'budgets', budget_id, 'transactions')
+params = {
+  "since_date": '2021-01-01',
+  "access_token": token
+}
+res = requests.get(request_url, params=params)
+resj = json.loads(res.content)
+df = pd.json_normalize(resj['data']['transactions'])
+df.amount = df.amount / -1000.00
 ynab_tx = get_transactions_from_ynab(budget_id=budget_id, token=token, since_date="2021-01-01")
 
 ynab_amz = (
@@ -72,5 +81,4 @@ ynab_amz = (
     .query("approved == False")
 )
 
-amz_orderinfo
-
+strftime(strptime(amz_orderinfo.order_date.loc[0], "%m/%d/%y"), "%Y-%m-%d")
