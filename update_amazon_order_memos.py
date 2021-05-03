@@ -273,8 +273,6 @@ def upload_tx_to_ynab(ynab_tx, budget_id, token):
 
     js = json.loads(j)
 
-    print(js)
-
     r = requests.patch(
         request_url, 
         data=j, 
